@@ -43,6 +43,26 @@ if info.status == "PENDING":
     client.link_receive("https://pay.paypay.ne.jp/XXXX", info=info)
 ```
 
+## PayPaython（アプリ版）から乗り換える場合
+
+アプリ版で使っていた **uuid はWeb版でもそのまま使えます**。同じアカウントで前に使っていた uuid を Web版の `client_uuid` に渡すと、PayPay は「登録済みの端末」と見なすので、**SMSなしでログインできます**（2026-10-30 に実機で確認）。
+
+```python
+from paypay_web import PayPay
+
+# 旧Botの保存データ（電話番号・パスワード・uuid）
+client = PayPay(client_uuid=old["client_uuid"])  # 古い自作Botだと "uuid" という名前のこともある
+prefix = client.start_login(old["phone"], old["password"])
+if prefix is not None:
+    # PayPay がその uuid を覚えていなかったときだけ、SMSが1回必要
+    client.verify_otp(input(f"SMSの {prefix}- のあと: "))
+client.save("paypay.json")
+```
+
+- 引き継げるのは **電話番号・パスワード・uuid** だけ。アプリ版のアクセストークン・リフレッシュトークンは使いません（Web版はログインし直してクッキーを作ります）
+- PayPaython は `device_uuid` と `client_uuid` を持っています。使うのは `client_uuid` のほう。違う uuid を渡しても、SMSを求められるだけで害はありません
+- uuid を引き継げば「乗り換えたらSMSでログインし直し」にはなりません。SMSが要るのは、PayPay 側がその uuid を忘れていたときだけです
+
 ## できること
 
 | 機能 | メソッド |
@@ -79,6 +99,7 @@ if info.status == "PENDING":
 ## 分かっていること
 
 - アクセストークンは発行時刻にかかわらず、だいたい毎日決まった時刻に切れる（1アカウント・1uuidごと）。`expires_in` で何秒持つかは PayPay が答える
+- アプリ版で登録済みの uuid は、Web版の `client_uuid` としてそのまま通る（SMSなしでログインできた）
 - Web版からの「送金リンクの作成」は PayPay 側で断られる（`P2P_LINK_WEB_SENDER`）
 - Web版はログインしないと `getP2PLinkInfo` も使えない（アプリ版は未ログインでも照会できた）
 - 送信元IPが PayPay のブロック対象（データセンターなど）だと `IP_BLACKLIST`（`01101007`）で全部弾かれる
