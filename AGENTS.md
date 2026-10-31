@@ -11,6 +11,8 @@
 
 これ以上は聞かずに、既存コードを読んで判断してください。
 
+**既存コードが複数のPayPayアカウントを扱っていたら**、聞かずに複数対応で実装してください（下の「複数アカウント対応」参照）。1アカウントしか扱っていなければ、単一で実装すればOK。
+
 ## 2. ファイルの置き方
 
 Botのフォルダ直下に、以下の2ファイルをそのままコピー：
@@ -70,6 +72,50 @@ Botの既存の仕組みに合わせて、以下のように振り分け：
 - `.gitignore` に `paypay.json` を追加
 - Dockerなどで動かす場合、ボリュームマウントして揮発させない
 - Botと同じフォルダに置く（絶対パスで指定でもOK）
+
+## 6.5. 複数アカウント対応
+
+Botが複数のPayPayアカウントを使い分ける場合（アカウントごとに受け取り先が違う・ユーザーごとに別アカウントなど）、以下のパターンで実装してください。
+
+**保存先**：アカウントごとに別のJSONファイル。
+例：`paypay_accounts/<アカウント名>.json`（アカウント名は電話番号・ユーザーID・内部的な名前など、Botの既存の呼び方に合わせる）
+
+**ログイン画面**：ユーザーが「どのアカウントを登録するか」を選べるようにする。既存のBotで既にアカウント選択の画面があれば、それをそのまま使う。無ければスラッシュコマンドに引数を足す（例：`/paypay add <名前>`）。
+
+**受け取り時**：既存のBotがどのアカウントで受け取るか決めるロジック（例：「このチャンネルはこのアカウント」「このユーザーの購入はこのアカウント」）はそのまま残す。決まったアカウントの `paypay.json` を読み込んで、`receive_with_hold` を呼ぶ：
+
+```python
+async def receive_paypay_link(account_name: str, url: str, passcode: str | None = None) -> str:
+    path = f"paypay_accounts/{account_name}.json"
+    client = PayPay.load(path)
+    if client is None:
+        return "LOGIN"
+    await asyncio.to_thread(client.ensure_alive)
+    client.save(path)
+    result = await receive_with_hold(client, url, passcode=passcode)
+    client.save(path)
+    return result
+```
+
+**同時受け取り**：**同じ `paypay.json` を2つの処理が同時に使うのは避ける**こと。クッキーが競合して無効化されることがある。アカウントごとに `asyncio.Lock` を1つ持って、そのアカウントで受け取り処理が走っている間は他をブロックする：
+
+```python
+_account_locks: dict[str, asyncio.Lock] = {}
+
+def _lock_for(account: str) -> asyncio.Lock:
+    if account not in _account_locks:
+        _account_locks[account] = asyncio.Lock()
+    return _account_locks[account]
+
+async def receive_paypay_link(account: str, url: str, ...) -> str:
+    async with _lock_for(account):
+        ...  # 上の処理
+```
+
+**気をつけること**：
+- アカウントが多いほど、1日1回の自動入り直しが積み重なる。10アカウントなら1日10回。短時間に集中させず、アクセスがあったときだけ `ensure_alive` を呼ぶ形でOK
+- 同じアカウントを別のBotや別プロセスで同時に使うと、PayPay側に警戒される。1アカウント＝1プロセスが基本
+- 新規アカウントの初回登録は、ユーザーに電話番号・パスワードを入れさせて `start_login` → SMS → `verify_otp` → `client.save(path)` の順
 
 ## 7. やらないこと
 
