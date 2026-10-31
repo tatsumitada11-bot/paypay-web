@@ -129,6 +129,7 @@ def history_entry_matches_receive(entry: dict, order_id: str, amount: int) -> bo
         for v in _flat(
             entry,
             [
+                "totalAmount",
                 "amount",
                 "amount.value",
                 "amountDetail.amount.value",
