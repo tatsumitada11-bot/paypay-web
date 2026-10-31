@@ -61,7 +61,9 @@ def _as_int(value: Any) -> int | None:
 
 LINK_DEAD_STATES = frozenset({"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "DECLINED", "FAILED"})
 
-LINK_DONE_STATES = frozenset({"COMPLETED", "SUCCESS", "SUCCEEDED", "DONE", "RECEIVED", "ACCEPTED"}) | LINK_DEAD_STATES
+LINK_RECEIVED_STATES = frozenset({"COMPLETED", "SUCCESS", "SUCCEEDED", "DONE", "RECEIVED", "ACCEPTED"})
+
+LINK_DONE_STATES = LINK_RECEIVED_STATES | LINK_DEAD_STATES
 
 
 def _link_states(raw: Any) -> set[str]:
@@ -79,13 +81,72 @@ def _is_pending_link(raw: Any) -> bool:
     )
 
 
+def is_link_dead(raw: Any) -> bool:
+    """リンクが終了状態（キャンセル・期限切れ・辞退など）か？保留ループを止めるのに使う。"""
+    return bool(_link_states(raw) & LINK_DEAD_STATES)
+
+
 def is_link_received_by_me(raw: Any) -> bool:
+    """このアカウントがもう受け取ったか？link_check の応答に 2026-10 から入った
+    `receiver.isReceiver` を使う。履歴検索より速くて確実。保留の確認はまずこれで。"""
     payload = _dict_at(raw, "payload")
     if _dict_at(payload, "receiver").get("isReceiver") is not True:
         return False
     states = _link_states(raw)
-    done = frozenset({"COMPLETED", "SUCCESS", "SUCCEEDED", "DONE", "RECEIVED", "ACCEPTED"})
-    return bool(states & done) and not (states & LINK_DEAD_STATES)
+    return bool(states & LINK_RECEIVED_STATES) and not (states & LINK_DEAD_STATES)
+
+
+def _flat(entry: Any, paths: list[str]) -> list:
+    out = []
+    for path in paths:
+        v: Any = entry
+        for k in path.split("."):
+            v = v.get(k) if isinstance(v, dict) else None
+        if v is not None and v != "" and not isinstance(v, (dict, list)):
+            out.append(v)
+    return out
+
+
+def history_entry_matches_receive(entry: dict, order_id: str, amount: int) -> bool:
+    """履歴1件が「注文 order_id、金額 amount の P2P受け取り完了」か？"""
+    ids = {str(v) for v in _flat(entry, ["orderId", "orderInfo.orderId"])}
+    if str(order_id) not in ids:
+        return False
+    types = {str(v).upper() for v in _flat(entry, ["orderType", "orderInfo.orderType"])}
+    if types != {"P2PRECEIVE"}:
+        return False
+    states = {
+        str(v).upper()
+        for v in _flat(
+            entry,
+            ["orderStatus", "statusInfo.orderStatus", "orderInfo.orderStatus", "orderInfo.statusInfo.orderStatus", "status"],
+        )
+    }
+    if not (states & LINK_RECEIVED_STATES):
+        return False
+    amounts = {
+        _as_int(v)
+        for v in _flat(
+            entry,
+            [
+                "amount",
+                "amount.value",
+                "amountDetail.amount.value",
+                "participantDetails.amountDetail.amount.value",
+            ],
+        )
+    }
+    return amount in amounts
+
+
+def find_receive_in_history(history: dict, order_id: str, amount: int) -> bool:
+    """取引履歴の応答から、注文 order_id・金額 amount の受け取り完了を探す。
+    `isReceiver` が無い古い応答や、保留が長引いたときの最終確認に使う。"""
+    payload = _dict_at(history, "payload")
+    entries = payload.get("paymentInfoList")
+    if not isinstance(entries, list):
+        return False
+    return any(isinstance(e, dict) and history_entry_matches_receive(e, order_id, amount) for e in entries)
 
 
 class LinkInfo(NamedTuple):

@@ -52,7 +52,25 @@ if info.status == "PENDING":
 | プロフィール | `get_profile()` |
 | 送金リンクの照会 | `link_check(url_or_code)` |
 | 送金リンクの受け取り | `link_receive(url_or_code, passcode=None, info=None)` |
-| 自分が受け取ったか | `paypay_web.is_link_received_by_me(info.raw)` |
+| 自分が受け取ったか（isReceiver） | `paypay_web.is_link_received_by_me(info.raw)` |
+| リンクが終了状態か | `paypay_web.is_link_dead(info.raw)` |
+| 履歴から受け取り完了を探す | `paypay_web.find_receive_in_history(history, order_id, amount)` |
+| 保留対処つきの受け取り（お手本） | `receive_with_hold.py` の `receive_with_hold(client, url)` |
+
+## 自販機・代行Bot向け：保留対処のパターン
+
+`link_receive` を呼んだ応答がタイムアウトすると、「お金を受け取れたのか失敗したのか」が分かりません。
+そのまま失敗扱いにするとお金を取り逃がし、成功扱いにすると商品を無料で渡してしまいます。
+→ **保留にして、あとから確実に判定する**のが正解です。
+
+判定は速くて確実な順でやります。
+
+1. `is_link_received_by_me(info.raw)` ← `link_check` の応答に入った `receiver.isReceiver` を見るだけ。1回の通信で済む
+2. `find_receive_in_history(history, order_id, amount)` ← 取引履歴から orderId + 金額 で探す。遅いが確実
+3. `is_link_dead(info.raw)` ← CANCELED / EXPIRED / REJECTED になっていたら諦めて「失敗」
+
+全部まとめた使えるコードが `receive_with_hold.py` にあります。Botに組み込むならこれをコピーして、
+`time.sleep` を `asyncio.sleep` に変えるだけで非同期にもできます。
 
 ## 分かっていること
 
